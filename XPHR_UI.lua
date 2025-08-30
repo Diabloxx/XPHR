@@ -40,7 +40,7 @@ local function ClassColorByName(name)
     return { r=1, g=1, b=1 }
 end
 
-local function SortMembers(mode)
+local function SortMembers()
     local t = {}
     local me = XPHR.FullName("player")
     local s = XPHR.state
@@ -72,8 +72,8 @@ local function SortMembers(mode)
         })
     end
     table.sort(t, function(a,b)
-        local ra = (mode == "rolling") and (a.xpPerHour_rolling or 0) or (a.xpPerHour_session or 0)
-        local rb = (mode == "rolling") and (b.xpPerHour_rolling or 0) or (b.xpPerHour_session or 0)
+    local ra = (a.xpPerHour_session or 0)
+    local rb = (b.xpPerHour_session or 0)
         if (a._self and not b._self) then return true end
         if (b._self and not a._self) then return false end
         return ra > rb
@@ -92,7 +92,7 @@ end
 local function Row_Set(m, row, mode)
     local name = m.name or "?"
     local level = m.level or 0
-    local rate = (mode == "rolling") and (m.xpPerHour_rolling or 0) or (m.xpPerHour_session or 0)
+    local rate = (m.xpPerHour_session or 0)
     local ttl = m.ttl or 0
     local col = ClassColorByName(name)
     row.name:SetText(name)
@@ -138,19 +138,13 @@ function UI.CreateMainFrame()
     header.title:SetScript("OnEnter", function()
         GameTooltip:SetOwner(header.title, "ANCHOR_TOPLEFT")
         GameTooltip:AddLine("XPHR", 1, 1, 1)
-        GameTooltip:AddLine("Session: total XP gained / session hours", 0.8, 0.8, 0.8)
-        GameTooltip:AddLine("10m Rolling: XP in last 10 minutes / (10/60)h", 0.8, 0.8, 0.8)
+        GameTooltip:AddLine("XP/hr: Session rate = total session XP / hours since reset", 0.8, 0.8, 0.8)
+        GameTooltip:AddLine("Sess: Total session XP gained", 0.8, 0.8, 0.8)
         GameTooltip:Show()
     end)
     header.title:SetScript("OnLeave", function() GameTooltip:Hide() end)
 
-    toggleBtn = CreateFrame("Button", nil, header, "UIPanelButtonTemplate")
-    toggleBtn:SetSize(64, HEADER_HEIGHT-4)
-    toggleBtn:SetPoint("RIGHT", -26, 0)
-    toggleBtn:SetScript("OnClick", function()
-        local m = XPHR.db.mode == "session" and "rolling" or "session"
-        UI.SetMode(m)
-    end)
+    -- Removed: mode toggle; always show session
 
     closeBtn = CreateFrame("Button", nil, header, "UIPanelCloseButton")
     closeBtn:SetPoint("RIGHT", 0, 0)
@@ -166,6 +160,7 @@ function UI.CreateMainFrame()
 
     local hname = MakeText(cols, 11, true); hname:SetPoint("LEFT", cols, "LEFT", NAME_X, 0); hname:SetText("Name")
     local hlev  = MakeText(cols, 11, true); hlev:SetPoint("LEFT", cols, "LEFT", LEVEL_X, 0); hlev:SetText("Lvl")
+    local hr    = MakeText(cols, 11, true);   hr:SetPoint("LEFT", cols, "LEFT", RATE_X, 0);  hr:SetText("XP/hr")  
     local hr    = MakeText(cols, 11, true);   hr:SetPoint("LEFT", cols, "LEFT", RATE_X, 0);  hr:SetText("XP/hr")
     local httl  = MakeText(cols, 11, true); httl:SetPoint("LEFT", cols, "LEFT", TTL_X, 0);   httl:SetText("TTL")
     local hs    = MakeText(cols, 11, true);   hs:SetPoint("LEFT", cols, "LEFT", SESS_X, 0);  hs:SetText("Sess")
@@ -189,7 +184,7 @@ function UI.CreateMainFrame()
             local menu = {
                 { text = "XPHR", isTitle = true, notCheckable = true },
                 { text = "Reset Session", notCheckable = true, func = function() XPHR.ResetSession() end },
-                { text = (XPHR.db.mode == "session" and "Switch to 10m Rolling" or "Switch to Session"), notCheckable = true, func = function() UI.SetMode(XPHR.db.mode == "session" and "rolling" or "session") end },
+                -- Removed: mode switch
                 { text = (XPHR.db.locked and "Unlock" or "Lock"), notCheckable = true, func = function() UI.SetLocked(not XPHR.db.locked) end },
                 { text = (XPHR.db.show and "Hide" or "Show"), notCheckable = true, func = function() UI.SetShown(not XPHR.db.show) end },
             }
@@ -200,7 +195,7 @@ function UI.CreateMainFrame()
         end
     end)
 
-    UI.SetMode(XPHR.db.mode)
+    -- Mode removed
     UI.SetLocked(XPHR.db.locked)
     UI.SetShown(XPHR.db.show)
 end
@@ -214,11 +209,7 @@ function UI.ApplyPosition(pos)
     frame:SetPoint(point, UIParent, relPoint, p and p.x or 0, p and p.y or 0)
 end
 
-function UI.SetMode(mode)
-    XPHR.db.mode = (mode == "rolling") and "rolling" or "session"
-    if toggleBtn then toggleBtn:SetText(XPHR.db.mode == "rolling" and "10m" or "Session") end
-    UI.Refresh()
-end
+-- Removed: SetMode (always session)
 
 function UI.SetLocked(locked)
     XPHR.db.locked = not not locked
@@ -235,7 +226,7 @@ end
 
 function UI.Refresh()
     if not frame or not frame:IsShown() then return end
-    local list = SortMembers(XPHR.db.mode)
+    local list = SortMembers()
     for i=1,MAX_ROWS do
         local r = rows[i]
         local m = list[i]

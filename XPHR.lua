@@ -86,6 +86,9 @@ state.lastUpdate = state.lastUpdate or 0
 state.ttl = state.ttl or 0
 state.xpPerHour_session = state.xpPerHour_session or 0
 state.xpPerHour_rolling = state.xpPerHour_rolling or 0
+state.roll_rate_window = state.roll_rate_window or 0
+state.roll_rate_kill = state.roll_rate_kill or 0
+state.kills = state.kills or {} -- recent kill samples {t, xp}
 
 -- Party helpers
 local function IteratePartyUnits()
@@ -139,29 +142,72 @@ local function RebuildParty()
     if XPHR.UI and XPHR.UI.RequestRefresh then XPHR.UI.RequestRefresh() end
 end
 
--- Rolling samples
+-- Rolling samples (time-window)
+local function RecalcRolling(now)
+    local samples = state.samples or {}
+    if #samples == 0 then
+    state.roll_rate_window = 0
+        return
+    end
+    local cutoff = (now or Now()) - 600
+    local kept = {}
+    local sum = 0
+    for i = 1, #samples do
+        local s = samples[i]
+        if s.t >= cutoff then
+            kept[#kept+1] = s
+            sum = sum + (s.dx or 0)
+        end
+    end
+    state.samples = kept
+    if #kept == 0 then
+        state.roll_rate_window = 0
+        return
+    end
+    local window = math.max(30, math.min(600, (now or Now()) - kept[1].t))
+    state.roll_rate_window = (sum / window) * 3600
+end
+
 local function PushSample(dx)
     if dx <= 0 then return end
     local t = Now()
     table.insert(state.samples, {t = t, dx = dx})
-    -- Drop old samples > 600s
-    local cutoff = t - 600
-    local sum = 0
-    local i = 1
-    while i <= #state.samples do
-        if state.samples[i].t < cutoff then
-            table.remove(state.samples, i)
-        else
-            sum = sum + state.samples[i].dx
-            i = i + 1
-        end
+    RecalcRolling(t)
+end
+
+-- Rolling rate (kill-based): use recent kill intervals and per-kill XP
+local function RecalcKillRate(now)
+    local kills = state.kills or {}
+    local n = #kills
+    if n < 2 then
+        state.roll_rate_kill = nil
+        return
     end
-    local window = math.max(1, math.min(600, t - (state.samples[1] and state.samples[1].t or t)))
-    state.xpPerHour_rolling = (sum / window) * 3600
+    local first = kills[1]
+    local last = kills[n]
+    local elapsed = (now or Now()) - first.t
+    local sumXP = 0
+    for i = 1, n do sumXP = sumXP + (kills[i].xp or 0) end
+    local avgXP = sumXP / n
+    local avgInterval = math.max(1, elapsed / (n - 1))
+    state.roll_rate_kill = (avgXP * 3600) / avgInterval
+end
+
+local function PushKill(xp)
+    if not xp or xp <= 0 then return end
+    local t = Now()
+    local kills = state.kills
+    kills[#kills+1] = { t = t, xp = xp }
+    -- keep last 25 kills
+    if #kills > 25 then
+        table.remove(kills, 1)
+    end
+    RecalcKillRate(t)
 end
 
 local function RecomputeTTL()
-    local rate = (XPHR.db.mode == "rolling") and state.xpPerHour_rolling or state.xpPerHour_session
+    -- Use session rate only
+    local rate = state.xpPerHour_session
     if rate and rate > 0 then
         local xp = UnitXP("player") or 0
         local xpMax = UnitXPMax("player") or 1
@@ -239,15 +285,6 @@ SlashCmdList["XPHR"] = function(msg)
     if msg == "reset" then
         ResetSession()
         print("XPHR: session reset.")
-    elseif msg:match("^mode") then
-        local m = msg:match("mode%s+(%a+)")
-        if m == "session" or m == "rolling" then
-            XPHR.db.mode = m
-            RecomputeTTL()
-            if XPHR.UI and XPHR.UI.SetMode then XPHR.UI.SetMode(m) end
-        else
-            print("XPHR: mode session|rolling")
-        end
     elseif msg == "lock" then
         XPHR.db.locked = true
         if XPHR.UI and XPHR.UI.SetLocked then XPHR.UI.SetLocked(true) end
@@ -269,6 +306,7 @@ frame:RegisterEvent("PLAYER_XP_UPDATE")
 frame:RegisterEvent("PLAYER_LEVEL_UP")
 frame:RegisterEvent("GROUP_ROSTER_UPDATE")
 frame:RegisterEvent("ZONE_CHANGED_NEW_AREA")
+frame:RegisterEvent("CHAT_MSG_COMBAT_XP_GAIN")
 
 frame:SetScript("OnEvent", function(_, event, ...)
     if event == "ADDON_LOADED" then
@@ -292,7 +330,6 @@ frame:SetScript("OnEvent", function(_, event, ...)
             if XPHR.UI and XPHR.UI.CreateMainFrame then
                 XPHR.UI.CreateMainFrame()
                 if XPHR.db.pos and XPHR.UI.ApplyPosition then XPHR.UI.ApplyPosition(XPHR.db.pos) end
-                if XPHR.UI.SetMode then XPHR.UI.SetMode(XPHR.db.mode) end
                 if XPHR.UI.SetLocked then XPHR.UI.SetLocked(XPHR.db.locked) end
                 if XPHR.UI.SetShown then XPHR.UI.SetShown(XPHR.db.show) end
             end
@@ -315,6 +352,17 @@ frame:SetScript("OnEvent", function(_, event, ...)
         if XPHR.Comms and XPHR.Comms.Cleanup then XPHR.Comms.Cleanup() end
     elseif event == "ZONE_CHANGED_NEW_AREA" then
         -- no-op, keep tidy
+    elseif event == "CHAT_MSG_COMBAT_XP_GAIN" then
+        local text = ...
+        if type(text) == "string" then
+            local xp = tonumber(text:match("(%d+)%s+experience"))
+            if xp and xp > 0 then
+                -- Record kill-based metrics; session XP is handled via PLAYER_XP_UPDATE
+                PushKill(xp)
+                if XPHR.UI and XPHR.UI.RequestRefresh then XPHR.UI.RequestRefresh() end
+                if XPHR.Comms and XPHR.Comms.MaybeSend then XPHR.Comms.MaybeSend("xp") end
+            end
+        end
     end
 end)
 
@@ -325,6 +373,12 @@ ticker:SetScript("OnUpdate", function(_, elapsed)
     acc = acc + (elapsed or 0)
     if acc >= 0.5 then
         acc = 0
+    -- Recompute both rolling estimators in real time
+    local now = Now()
+    RecalcRolling(now)
+    RecalcKillRate(now)
+    -- Prefer kill-based rate when available; otherwise fall back to window rate
+    state.xpPerHour_rolling = state.roll_rate_kill or state.roll_rate_window or 0
         RecomputeTTL()
         if XPHR.UI and XPHR.UI.Refresh then XPHR.UI.Refresh() end
         if XPHR.Comms and XPHR.Comms.MaybeSend then XPHR.Comms.MaybeSend() end
