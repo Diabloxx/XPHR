@@ -1,0 +1,11 @@
+## Interface: 50500
+## Title: XPHR - Party XP/hour
+## Notes: Tracks XP/hour for you and party members; MoP Classic.
+## Author: Copilot
+## Version: 1.0.0
+## SavedVariables: XPHRDB
+
+XPHR.xml
+XPHR.lua
+XPHR_Comms.lua
+XPHR_UI.lua
