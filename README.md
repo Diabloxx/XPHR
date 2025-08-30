@@ -2,7 +2,7 @@
 
 Self-contained World of Warcraft addon for Mists of Pandaria Classic that tracks your XP per hour and shows your party’s XP/hr, TTL, and session XP in a compact, movable UI. No external libraries.
 
-- Client: MoP Classic (Interface: 50400 placeholder)
+- Client: MoP Classic (5.5.0)
 - SavedVariables: `XPHRDB`
 - Addon prefix: `XPHR`
 
